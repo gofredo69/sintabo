@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:table_calendar/table_calendar.dart';
+import 'calendar_page.dart';
+import 'statistics_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,6 +36,7 @@ class SintaboApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'Sintabo',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.deepPurple),
       home: const Dashboard(),
@@ -50,6 +54,10 @@ class Dashboard extends StatefulWidget {
 class _DashboardState extends State<Dashboard> {
   List<String> _userCategories = ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
   String _selectedFilter = 'All'; // Track the active filter
+
+  // Budget fields
+  double _monthlyBudget = 10000.0; // Default budget
+  final _budgetController = TextEditingController();
 
   @override
   void initState() {
@@ -105,11 +113,18 @@ class _DashboardState extends State<Dashboard> {
                 },
               ),
               DropdownButtonFormField<String>(
-                value: _selectedCategory,
+                // SAFETY CHECK: If the current value isn't in the list, default to the first category
+                value: _userCategories.contains(_selectedCategory) 
+                  ? _selectedCategory 
+                  : _userCategories.first,
                 items: _userCategories
                     .map((cat) => DropdownMenuItem(value: cat, child: Text(cat)))
                     .toList(),
-                onChanged: (val) => setState(() => _selectedCategory = val!),
+                onChanged: (val) {
+                  // We use setSheetState because this is inside a BottomSheet
+                  setSheetState(() => _selectedCategory = val!);
+                  setState(() => _selectedCategory = val!);
+                },
                 decoration: const InputDecoration(labelText: 'Category'),
               ),
               TextField(
@@ -190,13 +205,15 @@ class _DashboardState extends State<Dashboard> {
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
             onPressed: () async {
               setState(() {
-                _userCategories.remove(category); // 1. Remove from local list
-                if (_selectedFilter == category) _selectedFilter = 'All'; // 2. Reset filter
+                _userCategories.remove(category);
+                // RESET the selection if the deleted category was currently active
+                if (_selectedCategory == category) {
+                  _selectedCategory = _userCategories.isNotEmpty ? _userCategories.first : 'Other';
+                }
+                if (_selectedFilter == category) _selectedFilter = 'All';
               });
               
-              // 3. IMPORTANT: Save the new list to SharedPreferences!
-              await _saveCategoriesToDisk(); 
-              
+              await _saveCategoriesToDisk();
               if (mounted) Navigator.pop(ctx);
             },
             child: const Text('Delete'),
@@ -206,12 +223,20 @@ class _DashboardState extends State<Dashboard> {
     );
   }
 
+  // Update your existing _loadCategories to also load the budget
   Future<void> _loadCategories() async {
     final prefs = await SharedPreferences.getInstance();
+    
+    // Load Categories
     final List<String>? savedCategories = prefs.getStringList('user_categories');
     if (savedCategories != null) {
       setState(() => _userCategories = savedCategories);
     }
+
+    // Load Budget
+    setState(() {
+      _monthlyBudget = prefs.getDouble('monthly_budget') ?? 10000.0;
+    });
   }
 
   Future<void> _saveCategoriesToDisk() async {
@@ -219,34 +244,107 @@ class _DashboardState extends State<Dashboard> {
     await prefs.setStringList('user_categories', _userCategories);
   }
 
+  // Function to save budget to disk
+  Future<void> _saveBudgetToDisk() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('monthly_budget', _monthlyBudget);
+  }
+
+  // Show a dialog so users can set their monthly budget
+  void _showSetBudgetDialog() {
+    _budgetController.text = _monthlyBudget.toString();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Set Monthly Budget'),
+        content: TextField(
+          controller: _budgetController,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(prefixText: '₱ ', hintText: 'Enter limit'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () async {
+              if (_budgetController.text.isNotEmpty) {
+                setState(() {
+                  _monthlyBudget = double.parse(_budgetController.text);
+                });
+                await _saveBudgetToDisk(); // Save it!
+                if (mounted) Navigator.pop(ctx);
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Sintabo AI')),
-      body: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: _expensesStream,
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-          
-          final expenses = snapshot.data!;
-
-          // FILTER THE LIST BASED ON SELECTION
-          final filteredExpenses = _selectedFilter == 'All' 
-              ? expenses 
-              : expenses.where((item) {
-                  if (_selectedFilter == 'Other') {
-                    // Show 'Other' AND anything that doesn't match current categories
-                    return item['category'] == 'Other' || !_userCategories.contains(item['category']);
-                  }
-                  return item['category'] == _selectedFilter;
-                }).toList();
-
-          // IMPORTANT: Update your Total calculation to use 'filteredExpenses'
-          final total = filteredExpenses.fold<double>(
-            0, (sum, item) => sum + (item['amount'] as num).toDouble(),
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _expensesStream,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Sintabo')),
+            body: const Center(child: CircularProgressIndicator()),
+            floatingActionButton: FloatingActionButton(
+              onPressed: () => _showAddExpenseSheet(context),
+              child: const Icon(Icons.add),
+            ),
           );
+        }
 
-          return Column(
+        final expenses = snapshot.data!;
+
+        // FILTER THE LIST BASED ON SELECTION
+        final filteredExpenses = _selectedFilter == 'All' 
+            ? expenses 
+            : expenses.where((item) {
+                if (_selectedFilter == 'Other') {
+                  // Show 'Other' AND anything that doesn't match current categories
+                  return item['category'] == 'Other' || !_userCategories.contains(item['category']);
+                }
+                return item['category'] == _selectedFilter;
+              }).toList();
+
+        // IMPORTANT: Update your Total calculation to use 'filteredExpenses'
+        final total = filteredExpenses.fold<double>(
+          0, (sum, item) => sum + (item['amount'] as num).toDouble(),
+        );
+
+
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Sintabo'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.bar_chart),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => StatisticsPage(expenses: expenses)),
+                  );
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.calendar_month),
+                onPressed: () {
+                  // Pass the current 'expenses' list to the new page
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => CalendarPage(expenses: expenses),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+          body: Column(
             children: [
               // ADD FILTER CHIPS ROW
               SingleChildScrollView(
@@ -278,6 +376,8 @@ class _DashboardState extends State<Dashboard> {
                 ),
               ),
 
+
+
               // TOTAL SUMMARY CARD
               Card(
                 color: Theme.of(context).colorScheme.primaryContainer,
@@ -296,7 +396,47 @@ class _DashboardState extends State<Dashboard> {
                   ),
                 ),
               ),
-              
+
+              // BUDGET PROGRESS BAR SECTION
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Monthly Budget: ₱${_monthlyBudget.toStringAsFixed(0)}',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.edit_note, size: 20),
+                          onPressed: _showSetBudgetDialog,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: LinearProgressIndicator(
+                        // Calculate percentage spent
+                        value: (total / _monthlyBudget).clamp(0.0, 1.0),
+                        minHeight: 12,
+                        backgroundColor: Colors.grey[200],
+                        // Turn red if you spend more than 90%
+                        color: (total / _monthlyBudget) > 0.9 ? Colors.red : Colors.green,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${((total / _monthlyBudget) * 100).toStringAsFixed(1)}% of your limit spent',
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              ),
+
               // THE LIST VIEW (Expanded to fill the rest of the screen)
               Expanded(
                 child: filteredExpenses.isEmpty
@@ -338,10 +478,12 @@ class _DashboardState extends State<Dashboard> {
                                 child: ListTile(
                                   leading: const Icon(Icons.receipt_long),
                                   title: Text(item['description'] ?? 'No Description'),
-                                  subtitle: Text(item['category']),
+                                  subtitle: Text(
+                                    '${item['category']} • ${DateTime.parse(item['created_at']).toLocal().toString().split(' ')[0]}', // Shows Category + Date
+                                  ),
                                   trailing: Text(
-                                    '₱${item['amount']}',
-                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                    '₱${(item['amount'] as num).toDouble().toStringAsFixed(2)}', // Professional currency look
+                                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                                   ),
                                 ),
                               ),
@@ -351,13 +493,13 @@ class _DashboardState extends State<Dashboard> {
                       ),
               ),
             ],
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _showAddExpenseSheet(context),
-        child: const Icon(Icons.add),
-      ),
+          ),
+          floatingActionButton: FloatingActionButton(
+            onPressed: () => _showAddExpenseSheet(context),
+            child: const Icon(Icons.add),
+          ),
+        );
+      },
     );
   }
 }
