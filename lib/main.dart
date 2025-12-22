@@ -165,26 +165,56 @@ class _DashboardState extends State<Dashboard> {
               
               // THE LIST VIEW (Expanded to fill the rest of the screen)
               Expanded(
-                child: expenses.isEmpty 
-                  ? const Center(child: Text('No expenses yet!'))
-                  : ListView.builder(
-                      itemCount: expenses.length,
-                      itemBuilder: (context, index) {
-                        final item = expenses[index];
-                        return Card(
-                          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          child: ListTile(
-                            leading: const Icon(Icons.receipt_long),
-                            title: Text(item['description'] ?? 'No Description'),
-                            subtitle: Text(item['category']),
-                            trailing: Text(
-                              '₱${item['amount']}', 
-                              style: const TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
+                child: expenses.isEmpty
+                    ? Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.receipt_long_outlined, size: 80, color: Colors.grey[300]),
+                          const SizedBox(height: 16),
+                          const Text('No expenses recorded yet.', style: TextStyle(color: Colors.grey)),
+                        ],
+                      )
+                    : RefreshIndicator(
+                        onRefresh: () async {
+                          // Manually trigger a refresh of the stream
+                          setState(() {}); 
+                          await Future.delayed(const Duration(seconds: 1));
+                        },
+                        child: ListView.builder(
+                          itemCount: expenses.length,
+                          itemBuilder: (context, index) {
+                            final item = expenses[index];
+                            return Dismissible(
+                              key: Key(item['id'].toString()),
+                              direction: DismissDirection.endToStart,
+                              background: Container(
+                                color: Colors.red,
+                                alignment: Alignment.centerRight,
+                                padding: const EdgeInsets.only(right: 20),
+                                child: const Icon(Icons.delete, color: Colors.white),
+                              ),
+                              onDismissed: (direction) async {
+                                await Supabase.instance.client
+                                    .from('expenses')
+                                    .delete()
+                                    .match({'id': item['id']});
+                              },
+                              child: Card(
+                                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                child: ListTile(
+                                  leading: const Icon(Icons.receipt_long),
+                                  title: Text(item['description'] ?? 'No Description'),
+                                  subtitle: Text(item['category']),
+                                  trailing: Text(
+                                    '₱${item['amount']}',
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
               ),
             ],
           );
