@@ -130,32 +130,27 @@ class _BillRegistryState extends State<BillRegistry> {
   }
 
   Future<void> _markAsPaid(Map<String, dynamic> bill) async {
-    final prefs = await SharedPreferences.getInstance();
-    
-    // CRITICAL: This key must match exactly what you use in main.dart
-    String? deviceId = prefs.getString('device_id');
-
-    // Safety check: If it's still null, we fetch it properly
-    if (deviceId == null || deviceId.isEmpty) {
-       deviceId = await getOrCreateDeviceId();
-    }
+    // 1. Get the ID for THIS device
+    final deviceId = await getOrCreateDeviceId();
 
     try {
+      // 2. Include 'device_id' in the insert to satisfy the new RLS policy
       await Supabase.instance.client.from('expenses').insert({
         'amount': bill['amount'],
         'category': bill['category'],
         'description': "Paid: ${bill['name']}",
-        'device_id': deviceId, 
-        'created_at': DateTime.now().toIso8601String(),
+        'device_id': deviceId, // This must be here for RLS to accept it
+        'created_at': DateTime.now().toUtc().toIso8601String(),
       });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("${bill['name']} logged with ID: ${deviceId?.substring(0,5)}...")),
+          SnackBar(content: Text("${bill['name']} logged as an expense!")),
         );
       }
     } catch (e) {
-      debugPrint("Sync Error: $e");
+      // Check your Debug Console in VS Code for this message if it still fails
+      debugPrint("Payment Logic Error: $e");
     }
   }
 }
