@@ -28,10 +28,13 @@ Future<void> main() async {
 
 Future<String> getOrCreateDeviceId() async {
   final prefs = await SharedPreferences.getInstance();
-  String? deviceId = prefs.getString('device_id');
-  if (deviceId == null) {
-    deviceId = const Uuid().v4();
-    await prefs.setString('device_id', deviceId);
+  // 1. Check if this specific phone already has an ID
+  String? deviceId = prefs.getString('unique_device_id');
+
+  // 2. If it's a new phone (or fresh install), create a brand NEW unique ID
+  if (deviceId == null || deviceId.isEmpty) {
+    deviceId = Uuid().v4(); // This generates a totally different string every time
+    await prefs.setString('unique_device_id', deviceId);
   }
   return deviceId;
 }
