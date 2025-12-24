@@ -14,7 +14,7 @@ Future<void> main() async {
     url: 'https://cavcdfhnbuiruhywpuzj.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNhdmNkZmhuYnVpcnVoeXdwdXpqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYzMzUzNTAsImV4cCI6MjA4MTkxMTM1MH0.89nL3gL1SLn15ZPwnpbOMRzLjdYBa6E3AWYgSq6KthU',
     headers: {
-      'x-device-id': await getOrCreateDeviceId(),
+      'x-device-id': await getOrCreateDeviceId(), // Must match 'x-device-id' in SQL
     },
   );
 
@@ -29,9 +29,8 @@ Future<String> getOrCreateDeviceId() async {
   final prefs = await SharedPreferences.getInstance();
   String? deviceId = prefs.getString('unique_device_id');
   if (deviceId == null || deviceId.isEmpty) {
-    deviceId = const Uuid().v4();
+    deviceId = Uuid().v4();
     await prefs.setString('unique_device_id', deviceId);
-    debugPrint("Generated NEW Unique ID: $deviceId");
   }
   return deviceId;
 }
@@ -397,13 +396,24 @@ class _DashboardState extends State<Dashboard> {
 
   @override
   Widget build(BuildContext context) {
+    // CRITICAL: Calculate these values directly from the widget.expenses list.
+    // This ensures that when the stream in MainNavigation pings, the UI updates instantly.
     final activeExpenses = widget.expenses.where((e) => !_deletedIds.contains(e['id'])).toList();
-    final totalProjectSpent = activeExpenses.fold<double>(0, (sum, item) => sum + (item['amount'] as num).toDouble());
-    final budgetPercent = (totalProjectSpent / _monthlyBudget).clamp(0.0, 1.0);
+    
+    final totalSpent = activeExpenses.fold<double>(
+      0, (sum, item) => sum + (item['amount'] as num).toDouble()
+    );
+
+    final budgetPercent = (totalSpent / _monthlyBudget).clamp(0.0, 1.0);
     final budgetColor = budgetPercent > 0.9 ? Colors.red : Colors.green;
 
-    final filtered = _selectedFilter == 'All' ? activeExpenses : activeExpenses.where((e) => e['category'] == _selectedFilter).toList();
-    final filteredTotal = filtered.fold<double>(0, (sum, item) => sum + (item['amount'] as num).toDouble());
+    final filtered = _selectedFilter == 'All' 
+        ? activeExpenses 
+        : activeExpenses.where((e) => e['category'] == _selectedFilter).toList();
+
+    final filteredTotal = filtered.fold<double>(
+      0, (sum, item) => sum + (item['amount'] as num).toDouble()
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sintabo')),

@@ -6,10 +6,10 @@ import 'package:uuid/uuid.dart';
 
 Future<String> getOrCreateDeviceId() async {
   final prefs = await SharedPreferences.getInstance();
-  String? deviceId = prefs.getString('device_id');
-  if (deviceId == null) {
-    deviceId = const Uuid().v4();
-    await prefs.setString('device_id', deviceId);
+  String? deviceId = prefs.getString('unique_device_id');
+  if (deviceId == null || deviceId.isEmpty) {
+    deviceId = Uuid().v4();
+    await prefs.setString('unique_device_id', deviceId);
   }
   return deviceId;
 }
@@ -130,26 +130,29 @@ class _BillRegistryState extends State<BillRegistry> {
   }
 
   Future<void> _markAsPaid(Map<String, dynamic> bill) async {
-    // 1. Get the ID for THIS device
     final deviceId = await getOrCreateDeviceId();
 
     try {
-      // 2. Include 'device_id' in the insert to satisfy the new RLS policy
-      await Supabase.instance.client.from('expenses').insert({
-        'amount': bill['amount'],
-        'category': bill['category'],
-        'description': "Paid: ${bill['name']}",
-        'device_id': deviceId, // This must be here for RLS to accept it
-        'created_at': DateTime.now().toUtc().toIso8601String(),
-      });
-
+      await Supabase.instance.client
+          .from('expenses')
+          .insert({
+            'amount': bill['amount'],
+            'category': bill['category'] ?? 'Bills',
+            'description': "Paid: ${bill['name']}",
+            'device_id': deviceId, 
+            'created_at': DateTime.now().toIso8601String(),
+          })
+          .setHeader('x-device-id', deviceId);
+    
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("${bill['name']} logged as an expense!")),
+          const SnackBar(content: Text("Payment Successful!"), backgroundColor: Colors.green),
         );
+        
+        // This is important: Pop with a result to notify the parent to refresh if needed
+        Navigator.pop(context, true); 
       }
     } catch (e) {
-      // Check your Debug Console in VS Code for this message if it still fails
       debugPrint("Payment Logic Error: $e");
     }
   }
