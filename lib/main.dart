@@ -4,6 +4,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart'; 
 import 'calendar_page.dart';
 import 'statistics_page.dart';
+import 'category_budget_manager.dart';
+import 'bill_registry.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,21 +26,162 @@ Future<String> getOrCreateDeviceId() async {
   return deviceId;
 }
 
+// Ensure this is outside any class at the top of main.dart
+final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
+
 class SintaboApp extends StatelessWidget {
   const SintaboApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Sintabo',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: const Color(0xFFE8DEF8)),
-      home: const Dashboard(),
+    // This is the "brain" that listens to your toggle
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeNotifier,
+      builder: (_, ThemeMode currentMode, __) {
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'Sintabo',
+          theme: ThemeData(
+            useMaterial3: true,
+            colorSchemeSeed: const Color(0xFFE8DEF8),
+            brightness: Brightness.light,
+          ),
+          darkTheme: ThemeData(
+            useMaterial3: true,
+            colorSchemeSeed: const Color(0xFFE8DEF8),
+            brightness: Brightness.dark,
+          ),
+          themeMode: currentMode, // This must be linked to currentMode
+          home: const MainNavigation(),
+        );
+      },
+    );
+  }
+}
+
+class MainNavigation extends StatefulWidget {
+  const MainNavigation({super.key});
+  @override
+  State<MainNavigation> createState() => _MainNavigationState();
+}
+
+class _MainNavigationState extends State<MainNavigation> {
+  int _selectedIndex = 0;
+
+  void _showAddExpenseSheet(BuildContext context) async {
+    // Load categories dynamically so the global FAB always has the latest list
+    final prefs = await SharedPreferences.getInstance();
+    final categories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
+    
+    if (!context.mounted) return;
+
+    final amountController = TextEditingController();
+    final descController = TextEditingController();
+    String cat = categories.first;
+    DateTime selectedDate = DateTime.now();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setSS) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom + 20, left: 20, right: 20, top: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text("Add Expense", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: "Amount", prefixText: "₱ ")),
+              ListTile(
+                title: Text("Date: ${selectedDate.toLocal().toString().split(' ')[0]}"),
+                trailing: const Icon(Icons.calendar_today),
+                onTap: () async {
+                  final picked = await showDatePicker(context: context, initialDate: selectedDate, firstDate: DateTime(2000), lastDate: DateTime(2101));
+                  if (picked != null) setSS(() => selectedDate = picked);
+                },
+              ),
+              DropdownButtonFormField<String>(
+                value: cat,
+                items: categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+                onChanged: (v) => setSS(() => cat = v!),
+              ),
+              TextField(controller: descController, decoration: const InputDecoration(labelText: "Description")),
+              const SizedBox(height: 20),
+              ElevatedButton(onPressed: () async {
+                final deviceId = await getOrCreateDeviceId();
+                await Supabase.instance.client.from('expenses').insert({
+                  'amount': double.parse(amountController.text),
+                  'category': cat,
+                  'description': descController.text,
+                  'device_id': deviceId,
+                  'created_at': selectedDate.toIso8601String(),
+                });
+                if (context.mounted) Navigator.pop(context);
+              }, child: const Text("Save")),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: Supabase.instance.client.from('expenses').stream(primaryKey: ['id']).order('created_at', ascending: false),
+      builder: (context, snapshot) {
+        final expenses = snapshot.data ?? [];
+        final List<Widget> pages = [
+          Dashboard(expenses: expenses),
+          StatisticsPage(expenses: expenses),
+          CalendarPage(expenses: expenses),
+          const ProfilePage(),
+        ];
+
+        return Scaffold(
+          body: pages[_selectedIndex],
+          // 1. Position the button in the center of the bar
+          floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+          floatingActionButton: FloatingActionButton(
+            shape: const CircleBorder(), // Round shape for OCR prep
+            onPressed: () => _showAddExpenseSheet(context),
+            child: const Icon(Icons.add, size: 30),
+          ),
+          // 2. Use BottomAppBar for the "Notch" design
+          bottomNavigationBar: BottomAppBar(
+            shape: const CircularNotchedRectangle(),
+            notchMargin: 8.0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                IconButton(
+                  icon: Icon(Icons.home, color: _selectedIndex == 0 ? Colors.purple : Colors.grey),
+                  onPressed: () => setState(() => _selectedIndex = 0),
+                ),
+                IconButton(
+                  icon: Icon(Icons.bar_chart, color: _selectedIndex == 1 ? Colors.purple : Colors.grey),
+                  onPressed: () => setState(() => _selectedIndex = 1),
+                ),
+                const SizedBox(width: 48), // Spacer for the FAB in the middle
+                IconButton(
+                  icon: Icon(Icons.calendar_month, color: _selectedIndex == 2 ? Colors.purple : Colors.grey),
+                  onPressed: () => setState(() => _selectedIndex = 2),
+                ),
+                IconButton(
+                  icon: Icon(Icons.person, color: _selectedIndex == 3 ? Colors.purple : Colors.grey),
+                  onPressed: () => setState(() => _selectedIndex = 3),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
 
 class Dashboard extends StatefulWidget {
-  const Dashboard({super.key});
+  final List<Map<String, dynamic>> expenses;
+  const Dashboard({super.key, required this.expenses});
   @override
   State<Dashboard> createState() => _DashboardState();
 }
@@ -47,7 +190,7 @@ class _DashboardState extends State<Dashboard> {
   List<String> _userCategories = ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
   String _selectedFilter = 'All';
   double _monthlyBudget = 10000.0;
-  final _expensesStream = Supabase.instance.client.from('expenses').stream(primaryKey: ['id']).order('created_at', ascending: false);
+  Map<String, double> _categoryBudgets = {}; // Stores limits like {'Food': 3000}
 
   @override
   void initState() {
@@ -60,7 +203,19 @@ class _DashboardState extends State<Dashboard> {
     setState(() {
       _monthlyBudget = prefs.getDouble('monthly_budget') ?? 10000.0;
       _userCategories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
+      
+      // Load individual category budgets using a dynamic key
+      for (String cat in _userCategories) {
+        _categoryBudgets[cat] = prefs.getDouble('budget_$cat') ?? 0.0;
+      }
     });
+  }
+
+  // Helper to calculate spending for a specific envelope
+  double _getAmountSpentInCategory(String category) {
+    return widget.expenses
+        .where((e) => e['category'] == category)
+        .fold(0.0, (sum, e) => sum + (e['amount'] as num).toDouble());
   }
 
   Future<void> _saveSettings() async {
@@ -188,12 +343,8 @@ class _DashboardState extends State<Dashboard> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: _expensesStream,
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) return const Scaffold(body: Center(child: CircularProgressIndicator()));
-        final expenses = snapshot.data!;
-        
+    final expenses = widget.expenses;
+
         final totalProjectSpent = expenses.fold<double>(0, (sum, item) => sum + (item['amount'] as num).toDouble());
         final budgetPercent = (totalProjectSpent / _monthlyBudget).clamp(0.0, 1.0);
         final budgetColor = budgetPercent > 0.9 ? Colors.red : Colors.green;
@@ -204,10 +355,6 @@ class _DashboardState extends State<Dashboard> {
         return Scaffold(
           appBar: AppBar(
             title: const Text('Sintabo'),
-            actions: [
-              IconButton(icon: const Icon(Icons.bar_chart), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c) => StatisticsPage(expenses: expenses)))),
-              IconButton(icon: const Icon(Icons.calendar_month), onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (c) => CalendarPage(expenses: expenses)))),
-            ],
           ),
           body: Column(
             children: [
@@ -227,16 +374,28 @@ class _DashboardState extends State<Dashboard> {
                   ],
                 ),
               ),
+              // FORCE VISIBILITY FIX
               Container(
                 width: double.infinity,
                 margin: const EdgeInsets.all(16),
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(color: const Color(0xFFE8DEF8), borderRadius: BorderRadius.circular(16)),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE8DEF8), // The light purple background from your screenshot
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Column(
                   children: [
-                    Text(_selectedFilter == 'All' ? "Total Spent" : "Spent in $_selectedFilter", style: const TextStyle(fontSize: 18)),
-                    Text("₱${filteredTotal.toStringAsFixed(2)}", style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+                    const Text("Total Spent", style: TextStyle(color: Colors.black54, fontSize: 16)),
+                    Text(
+                      "₱${filteredTotal.toStringAsFixed(2)}",
+                      style: const TextStyle(
+                        fontSize: 36,
+                        fontWeight: FontWeight.bold,
+                        // We use absolute black here to ensure it never "blends" in
+                        color: Colors.black, 
+                        letterSpacing: -1,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -256,11 +415,64 @@ class _DashboardState extends State<Dashboard> {
                   ],
                 ),
               ),
+              // COMPACT HORIZONTAL ENVELOPES
+              if (_userCategories.any((cat) => (_categoryBudgets[cat] ?? 0) > 0))
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: Text("Active Envelopes", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.grey)),
+                    ),
+                    SizedBox(
+                      height: 100, // Fixed height to keep the UI stable
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        children: _userCategories.where((cat) => (_categoryBudgets[cat] ?? 0) > 0).map((cat) {
+                          final spent = _getAmountSpentInCategory(cat);
+                          final limit = _categoryBudgets[cat]!;
+                          final percent = (spent / limit).clamp(0.0, 1.0);
+                          final isOver = spent > limit;
+
+                          return Container(
+                            width: 160,
+                            margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: themeNotifier.value == ThemeMode.dark ? Colors.grey[900] : Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: isOver ? Colors.red.withOpacity(0.5) : Colors.transparent),
+                              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4)],
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(cat, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
+                                const SizedBox(height: 4),
+                                LinearProgressIndicator(
+                                  value: percent,
+                                  color: isOver ? Colors.red : Colors.purple[200],
+                                  backgroundColor: Colors.grey[200],
+                                  minHeight: 4,
+                                ),
+                                const SizedBox(height: 4),
+                                Text("₱${spent.toInt()} / ₱${limit.toInt()}", 
+                                  style: TextStyle(fontSize: 10, color: isOver ? Colors.red : Colors.grey)),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ],
+                ),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
-                    setState(() {}); // Pull-to-refresh functional
-                    await Future.delayed(const Duration(seconds: 1));
+                    await _loadSettings(); // Reload budgets to update red bars
+                    setState(() {}); 
                   },
                   child: ListView.builder(
                     itemCount: filtered.length,
@@ -287,9 +499,93 @@ class _DashboardState extends State<Dashboard> {
               ),
             ],
           ),
-          floatingActionButton: FloatingActionButton(onPressed: () => _showAddExpenseSheet(context), child: const Icon(Icons.add)),
         );
-      },
+  }
+}
+
+class ProfilePage extends StatelessWidget {
+  const ProfilePage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Profile & Settings")),
+      body: ListView(
+        children: [
+          // User Activity Header
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 30,
+                  backgroundColor: Color(0xFFE8DEF8),
+                  child: Icon(Icons.person, size: 40, color: Colors.purple),
+                ),
+                SizedBox(width: 16),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text("User Activity", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                    Text("Managing your Sintabo data", style: TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const Divider(),
+          
+          // DARK MODE TOGGLE
+          ValueListenableBuilder<ThemeMode>(
+            valueListenable: themeNotifier,
+            builder: (context, currentMode, _) {
+              return SwitchListTile(
+                title: const Text("Dark Mode"),
+                secondary: const Icon(Icons.dark_mode_outlined),
+                value: currentMode == ThemeMode.dark,
+                onChanged: (bool isDark) {
+                  // This changes the global state, triggering the MaterialApp rebuild
+                  themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
+                },
+              );
+            },
+          ),
+
+          // ENVELOPE SYSTEM ENTRY POINT
+          ListTile(
+            leading: const Icon(Icons.account_balance_wallet_outlined),
+            title: const Text("Category Budgets"),
+            subtitle: const Text("Set limits for Food, Transport, etc."),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final prefs = await SharedPreferences.getInstance();
+              final categories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
+              if (context.mounted) {
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (c) => CategoryBudgetManager(categories: categories)
+                ));
+              }
+            },
+          ),
+
+          // RECURRING EXPENSES ENTRY POINT
+          ListTile(
+            leading: const Icon(Icons.sync),
+            title: const Text("Recurring Expenses"),
+            subtitle: const Text("Manage subscriptions and bills"),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () async {
+              final prefs = await SharedPreferences.getInstance();
+              final categories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
+              if (context.mounted) {
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (c) => BillRegistry(categories: categories)
+                ));
+              }
+            },
+          ),
+        ],
+      ),
     );
   }
 }
