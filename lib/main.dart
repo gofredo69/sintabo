@@ -9,10 +9,20 @@ import 'bill_registry.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // 1. Initialize Supabase as usual
   await Supabase.initialize(
     url: 'https://cavcdfhnbuiruhywpuzj.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNhdmNkZmhuYnVpcnVoeXdwdXpqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYzMzUzNTAsImV4cCI6MjA4MTkxMTM1MH0.89nL3gL1SLn15ZPwnpbOMRzLjdYBa6E3AWYgSq6KthU',
   );
+
+  // 2. Load the theme preference from storage
+  final prefs = await SharedPreferences.getInstance();
+  final isDarkMode = prefs.getBool('is_dark_mode') ?? false; // Default to Light if not set
+  
+  // 3. Set the initial value of our global notifier
+  themeNotifier.value = isDarkMode ? ThemeMode.dark : ThemeMode.light;
+
   runApp(const SintaboApp());
 }
 
@@ -341,6 +351,83 @@ class _DashboardState extends State<Dashboard> {
     );
   }
 
+  void _showExpenseDetails(BuildContext context, Map<String, dynamic> expense) {
+    // Parse the timestamp for a cleaner UI
+    final DateTime date = DateTime.parse(expense['created_at']);
+    final String formattedDate = "${date.month}/${date.day}/${date.year}";
+    final String formattedTime = "${date.hour}:${date.minute.toString().padLeft(2, '0')}";
+
+    // Safety check for device_id to prevent crashes
+    final String rawDeviceId = expense['device_id']?.toString() ?? 'Unknown';
+    final String deviceIdPreview = rawDeviceId.length >= 8 
+        ? "${rawDeviceId.substring(0, 8)}..." 
+        : rawDeviceId;
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40, 
+                  height: 4, 
+                  decoration: BoxDecoration(
+                    color: Colors.grey[300], 
+                    borderRadius: BorderRadius.circular(2)
+                  )
+                ),
+              ),
+              const SizedBox(height: 20),
+              // REMOVED 'const' from here because the style or content might be dynamic
+              Text(
+                "Transaction Detail", 
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
+              ),
+              const Divider(),
+              // These rows are dynamic and MUST NOT have 'const'
+              _detailRow("Description", expense['description']?.toString() ?? 'No Description'),
+              _detailRow("Amount", "₱${expense['amount']}"),
+              _detailRow("Category", expense['category']?.toString() ?? 'Unknown'),
+              _detailRow("Date", formattedDate),
+              _detailRow("Time", formattedTime),
+              _detailRow("Device ID", deviceIdPreview),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Close"),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // Helper widget for clean rows
+  Widget _detailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey)),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w500)),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final expenses = widget.expenses;
@@ -476,24 +563,31 @@ class _DashboardState extends State<Dashboard> {
                   },
                   child: ListView.builder(
                     itemCount: filtered.length,
-                    itemBuilder: (ctx, i) => Dismissible(
-                      key: Key(filtered[i]['id'].toString()),
-                      // FIXED: Permanently deletes from Supabase
-                      onDismissed: (dir) async {
-                        final id = filtered[i]['id'];
-                        await Supabase.instance.client.from('expenses').delete().match({'id': id});
-                      },
-                      background: Container(color: Colors.red, alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete, color: Colors.white)),
-                      child: Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                        child: ListTile(
-                          leading: const Icon(Icons.receipt_long),
-                          title: Text(filtered[i]['description'] ?? ""),
-                          subtitle: Text("${filtered[i]['category']} • ${filtered[i]['created_at'].split('T')[0]}"),
-                          trailing: Text("₱${filtered[i]['amount']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                    itemBuilder: (ctx, i) {
+                      final expense = filtered[i];
+                      return Dismissible(
+                        key: Key(expense['id'].toString()),
+                        // FIXED: Permanently deletes from Supabase
+                        onDismissed: (dir) async {
+                          final id = expense['id'];
+                          await Supabase.instance.client.from('expenses').delete().match({'id': id});
+                        },
+                        background: Container(color: Colors.red, alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete, color: Colors.white)),
+                        child: Card(
+                          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                          child: ListTile(
+                            leading: const CircleAvatar(
+                              child: Icon(Icons.receipt_long, size: 20),
+                            ),
+                            title: Text(expense['description'] ?? 'No Description'),
+                            subtitle: Text("${expense['category']} • ${expense['created_at'].toString().split('T')[0]}"),
+                            trailing: Text("₱${expense['amount']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                            // NEW: Detail Trigger
+                            onTap: () => _showExpenseDetails(context, expense), 
+                          ),
                         ),
-                      ),
-                    ),
+                      );
+                    },
                   ),
                 ),
               ),
@@ -543,9 +637,13 @@ class ProfilePage extends StatelessWidget {
                 title: const Text("Dark Mode"),
                 secondary: const Icon(Icons.dark_mode_outlined),
                 value: currentMode == ThemeMode.dark,
-                onChanged: (bool isDark) {
-                  // This changes the global state, triggering the MaterialApp rebuild
+                onChanged: (bool isDark) async {
+                  // 1. Update the UI immediately
                   themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
+
+                  // 2. Save the "Memory" to the device
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('is_dark_mode', isDark); // This locks it in for the next restart
                 },
               );
             },

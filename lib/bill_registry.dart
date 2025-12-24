@@ -130,33 +130,32 @@ class _BillRegistryState extends State<BillRegistry> {
   }
 
   Future<void> _markAsPaid(Map<String, dynamic> bill) async {
-    // 1. Fetch the unique device ID we established in the gold-stable version
     final prefs = await SharedPreferences.getInstance();
-    String? deviceId = prefs.getString('unique_device_id');
+    
+    // CRITICAL: This key must match exactly what you use in main.dart
+    String? deviceId = prefs.getString('device_id');
 
-    // 2. Fallback: If for some reason it's missing, generate it on the fly
-    if (deviceId == null) {
-      deviceId = const Uuid().v4();
-      await prefs.setString('unique_device_id', deviceId);
+    // Safety check: If it's still null, we fetch it properly
+    if (deviceId == null || deviceId.isEmpty) {
+       deviceId = await getOrCreateDeviceId();
     }
 
-    // 3. Include 'device_id' in the insert map to satisfy the DB constraint
     try {
       await Supabase.instance.client.from('expenses').insert({
         'amount': bill['amount'],
         'category': bill['category'],
         'description': "Paid: ${bill['name']}",
-        'device_id': deviceId, // This is the missing piece!
+        'device_id': deviceId, 
         'created_at': DateTime.now().toIso8601String(),
       });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("${bill['name']} logged as an expense!")),
+          SnackBar(content: Text("${bill['name']} logged with ID: ${deviceId?.substring(0,5)}...")),
         );
       }
     } catch (e) {
-      debugPrint("Payment Error: $e");
+      debugPrint("Sync Error: $e");
     }
   }
 }
