@@ -6,7 +6,9 @@ import 'package:uuid/uuid.dart';
 
 Future<String> getOrCreateDeviceId() async {
   final prefs = await SharedPreferences.getInstance();
+  // We use 'unique_device_id' everywhere now
   String? deviceId = prefs.getString('unique_device_id');
+  
   if (deviceId == null || deviceId.isEmpty) {
     deviceId = Uuid().v4();
     await prefs.setString('unique_device_id', deviceId);
@@ -16,7 +18,8 @@ Future<String> getOrCreateDeviceId() async {
 
 class BillRegistry extends StatefulWidget {
   final List<String> categories;
-  const BillRegistry({super.key, required this.categories});
+  final List<Map<String, dynamic>> expenses;
+  const BillRegistry({super.key, required this.categories, required this.expenses});
 
   @override
   State<BillRegistry> createState() => _BillRegistryState();
@@ -140,7 +143,8 @@ class _BillRegistryState extends State<BillRegistry> {
             'category': bill['category'] ?? 'Bills',
             'description': "Paid: ${bill['name']}",
             'device_id': deviceId, 
-            'created_at': DateTime.now().toIso8601String(),
+            // Stripping the 'Z' ensures it stays in Philippines time
+            'created_at': DateTime.now().toIso8601String().split('Z')[0],
           })
           .setHeader('x-device-id', deviceId);
     

@@ -27,7 +27,9 @@ Future<void> main() async {
 
 Future<String> getOrCreateDeviceId() async {
   final prefs = await SharedPreferences.getInstance();
+  // We use 'unique_device_id' everywhere now
   String? deviceId = prefs.getString('unique_device_id');
+  
   if (deviceId == null || deviceId.isEmpty) {
     deviceId = Uuid().v4();
     await prefs.setString('unique_device_id', deviceId);
@@ -129,14 +131,26 @@ class _MainNavigationState extends State<MainNavigation> {
               ElevatedButton(onPressed: () async {
                 Navigator.pop(ctx);
                 final deviceId = await getOrCreateDeviceId();
+                
+                // Combine selected date with current time to avoid 'Midnight Bug'
+                final now = DateTime.now();
+                final finalDateTime = DateTime(
+                  selectedDate.year,
+                  selectedDate.month,
+                  selectedDate.day,
+                  now.hour,
+                  now.minute,
+                  now.second,
+                );
+
                 await Supabase.instance.client.from('expenses').insert({
                   'amount': double.parse(amountController.text),
                   'category': cat,
                   'description': descController.text,
                   'device_id': deviceId,
-                  'created_at': selectedDate.toUtc().toIso8601String(),
+                  // Use local ISO string without timezone forcing
+                  'created_at': finalDateTime.toIso8601String(),
                 });
-                // Force a small delay to allow Supabase to process before the stream pulses
                 setState(() {});
               }, child: const Text("Save")),
             ],
@@ -169,7 +183,7 @@ class _MainNavigationState extends State<MainNavigation> {
           Dashboard(key: ValueKey(expenses.length), expenses: expenses),
           StatisticsPage(expenses: expenses),
           CalendarPage(expenses: expenses),
-          const ProfilePage(),
+          ProfilePage(expenses: expenses),
         ];
 
         return Scaffold(
@@ -546,7 +560,8 @@ class _DashboardState extends State<Dashboard> {
 }
 
 class ProfilePage extends StatelessWidget {
-  const ProfilePage({super.key});
+  final List<Map<String, dynamic>> expenses;
+  const ProfilePage({super.key, required this.expenses});
 
   @override
   Widget build(BuildContext context) {
@@ -615,7 +630,10 @@ class ProfilePage extends StatelessWidget {
               final categories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
               if (context.mounted) {
                 Navigator.push(context, MaterialPageRoute(
-                  builder: (c) => BillRegistry(categories: categories)
+                  builder: (c) => BillRegistry(
+                    categories: categories, 
+                    expenses: expenses, // Pass the live data from MainNavigation's stream
+                  )
                 ));
               }
             },
