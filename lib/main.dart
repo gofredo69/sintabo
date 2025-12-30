@@ -27,7 +27,7 @@ Future<void> main() async {
 
 Future<String> getOrCreateDeviceId() async {
   final prefs = await SharedPreferences.getInstance();
-  // We use 'unique_device_id' everywhere now
+  // Ensure this key name is IDENTICAL in both files
   String? deviceId = prefs.getString('unique_device_id');
   
   if (deviceId == null || deviceId.isEmpty) {
@@ -77,11 +77,21 @@ class MainNavigation extends StatefulWidget {
 class _MainNavigationState extends State<MainNavigation> {
   int _selectedIndex = 0;
   String? currentDeviceId;
+  SharedPreferences? _prefs;
+  
+  final Map<String, Color> _categoryColors = {
+    'Food': const Color(0xFFFF5252),
+    'Transport': const Color(0xFF448AFF),
+    'Shopping': const Color(0xFFFFD740),
+    'Bills': const Color(0xFF7C4DFF),
+    'Other': const Color(0xFF90A4AE),
+  };
 
   @override
   void initState() {
     super.initState();
     _loadId();
+    _initPrefs();
   }
 
   Future<void> _loadId() async {
@@ -89,6 +99,26 @@ class _MainNavigationState extends State<MainNavigation> {
     setState(() {
       currentDeviceId = id;
     });
+  }
+
+  Future<void> _initPrefs() async {
+    final p = await SharedPreferences.getInstance();
+    if (mounted) setState(() => _prefs = p);
+  }
+
+  Map<String, Color> _getCategoryColorMap() {
+    if (_prefs == null) return {};
+    final categories = _prefs!.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
+    Map<String, Color> colorMap = {};
+    for (String cat in categories) {
+      final hex = _prefs!.getString('color_$cat');
+      if (hex != null) {
+        colorMap[cat] = Color(int.parse(hex, radix: 16));
+      } else {
+        colorMap[cat] = const Color(0xFF6750A4); // Default purple
+      }
+    }
+    return colorMap;
   }
 
   void _showAddExpenseSheet(BuildContext context) async {
@@ -101,6 +131,7 @@ class _MainNavigationState extends State<MainNavigation> {
     final descController = TextEditingController();
     String cat = categories.first;
     DateTime selectedDate = DateTime.now();
+    Color selectedColor = _categoryColors[cat] ?? const Color(0xFF6750A4);
 
     showModalBottomSheet(
       context: context,
@@ -124,32 +155,38 @@ class _MainNavigationState extends State<MainNavigation> {
               DropdownButtonFormField<String>(
                 value: cat,
                 items: categories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                onChanged: (v) => setSS(() => cat = v!),
+                onChanged: (v) => setSS(() {
+                  cat = v!;
+                  if (_categoryColors.containsKey(cat)) {
+                    selectedColor = _categoryColors[cat]!;
+                  }
+                }),
               ),
               TextField(controller: descController, decoration: const InputDecoration(labelText: "Description")),
               const SizedBox(height: 20),
               ElevatedButton(onPressed: () async {
                 Navigator.pop(ctx);
                 final deviceId = await getOrCreateDeviceId();
-                
-                // Combine selected date with current time to avoid 'Midnight Bug'
+                final prefs = await SharedPreferences.getInstance();
+
+                // FIX 1: Retrieve the color assigned to the category
+                String? savedHex = prefs.getString('color_$cat');
+                String finalHex = savedHex ?? const Color(0xFF6750A4).value.toRadixString(16).padLeft(8, '0');
+
+                // FIX 2: Date Standardizing (UTC) to stop the 'Next Day' jump
                 final now = DateTime.now();
-                final finalDateTime = DateTime(
-                  selectedDate.year,
-                  selectedDate.month,
-                  selectedDate.day,
-                  now.hour,
-                  now.minute,
-                  now.second,
-                );
+                final finalDateTime = DateTime(selectedDate.year, selectedDate.month, selectedDate.day, now.hour, now.minute, now.second);
+                
+                // FORCE UTC explicitly
+                final String utcTimestamp = finalDateTime.toUtc().toIso8601String();
 
                 await Supabase.instance.client.from('expenses').insert({
                   'amount': double.parse(amountController.text),
                   'category': cat,
                   'description': descController.text,
+                  'category_color': finalHex, 
                   'device_id': deviceId,
-                  // Use local ISO string without timezone forcing
-                  'created_at': finalDateTime.toIso8601String(),
+                  'created_at': utcTimestamp, // This 'Z' at the end tells Supabase it is UTC
                 });
                 setState(() {});
               }, child: const Text("Save")),
@@ -181,7 +218,7 @@ class _MainNavigationState extends State<MainNavigation> {
         final List<Widget> pages = [
           // Added a Key to the Dashboard so it rebuilds when the data count changes
           Dashboard(key: ValueKey(expenses.length), expenses: expenses),
-          StatisticsPage(expenses: expenses),
+          StatisticsPage(expenses: expenses, categoryColors: _getCategoryColorMap()),
           CalendarPage(expenses: expenses),
           ProfilePage(expenses: expenses),
         ];
@@ -226,6 +263,43 @@ class _MainNavigationState extends State<MainNavigation> {
   }
 }
 
+class CategoryColorPicker extends StatefulWidget {
+  final Function(Color) onColorSelected;
+  const CategoryColorPicker({super.key, required this.onColorSelected});
+
+  @override
+  State<CategoryColorPicker> createState() => _CategoryColorPickerState();
+}
+
+class _CategoryColorPickerState extends State<CategoryColorPicker> {
+  Color selected = const Color(0xFFFF5252);
+  final List<Color> palette = [
+    const Color(0xFFFF5252), const Color(0xFF448AFF), const Color(0xFFFFD740),
+    const Color(0xFF00E676), const Color(0xFF7C4DFF), const Color(0xFF00BCD4),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: palette.map((c) => GestureDetector(
+        onTap: () {
+          setState(() => selected = c);
+          widget.onColorSelected(c);
+        },
+        child: Container(
+          width: 32, height: 32,
+          decoration: BoxDecoration(
+            color: c, shape: BoxShape.circle,
+            border: Border.all(color: selected == c ? Colors.black : Colors.transparent, width: 2),
+          ),
+          child: selected == c ? const Icon(Icons.check, size: 16, color: Colors.white) : null,
+        ),
+      )).toList(),
+    );
+  }
+}
+
 class Dashboard extends StatefulWidget {
   final List<Map<String, dynamic>> expenses;
   const Dashboard({super.key, required this.expenses});
@@ -248,18 +322,24 @@ class _DashboardState extends State<Dashboard> {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _monthlyBudget = prefs.getDouble('monthly_budget') ?? 10000.0;
-      _userCategories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
-      for (String cat in _userCategories) {
-        _categoryBudgets[cat] = prefs.getDouble('budget_$cat') ?? 0.0;
-      }
-    });
+    final savedCategories = prefs.getStringList('user_categories');
+    
+    // Only update if we actually have saved data to avoid blanking out the UI
+    if (savedCategories != null && savedCategories.isNotEmpty) {
+      setState(() {
+        _userCategories = savedCategories;
+        _monthlyBudget = prefs.getDouble('monthly_budget') ?? 10000.0;
+        for (String cat in _userCategories) {
+          _categoryBudgets[cat] = prefs.getDouble('budget_$cat') ?? 0.0;
+        }
+      });
+    }
   }
 
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('monthly_budget', _monthlyBudget);
+    // Save the updated list to local storage
     await prefs.setStringList('user_categories', _userCategories);
   }
 
@@ -288,22 +368,57 @@ class _DashboardState extends State<Dashboard> {
     );
   }
 
+  // 1. The Logic: Executes only AFTER the dialog closes
+  void _handleAddNewCategory(String name, Color color) async {
+    if (_userCategories.contains(name)) return;
+
+    // Wait 150ms to let the UI finish the "pop" animation to prevent thread lock
+    Future.delayed(const Duration(milliseconds: 150), () async {
+      setState(() {
+        _userCategories.add(name);
+        // _categoryColors[name] = color;
+      });
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('user_categories', _userCategories);
+      // Save the color hex so the app remembers it
+      await prefs.setString('color_$name', color.value.toRadixString(16));
+    });
+  }
+
   void _showAddCategoryDialog() {
     final controller = TextEditingController();
+    Color pickedColor = const Color(0xFFFF5252); // Default
+
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         title: const Text("New Category"),
-        content: TextField(controller: controller, decoration: const InputDecoration(hintText: "Category Name")),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: controller, decoration: const InputDecoration(hintText: "Category Name")),
+            const SizedBox(height: 20),
+            // Using the isolated widget to prevent frame-lock
+            CategoryColorPicker(onColorSelected: (c) => pickedColor = c),
+          ],
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancel")),
-          ElevatedButton(onPressed: () {
-            if (controller.text.isNotEmpty) {
-              setState(() => _userCategories.add(controller.text));
-              _saveSettings();
-              Navigator.pop(ctx);
-            }
-          }, child: const Text("Add")),
+          ElevatedButton(
+            onPressed: () {
+              if (controller.text.trim().isNotEmpty) {
+                final name = controller.text.trim();
+                // THE FIX: Close first, then delay logic to let frames clear
+                Navigator.pop(ctx);
+                Future.delayed(const Duration(milliseconds: 100), () {
+                  _handleAddNewCategory(name, pickedColor);
+                });
+              }
+            }, 
+            child: const Text("Add")
+          ),
         ],
       ),
     );
@@ -395,6 +510,23 @@ class _DashboardState extends State<Dashboard> {
     );
   }
 
+  // Helper function to make it more visual
+  Widget _getCategoryIcon(String category) {
+    IconData icon;
+    switch (category.toLowerCase()) {
+      case 'food': icon = Icons.restaurant; break;
+      case 'transport': icon = Icons.directions_car; break;
+      case 'shopping': icon = Icons.shopping_bag; break;
+      case 'bills': icon = Icons.receipt; break;
+      default: icon = Icons.category;
+    }
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(color: const Color(0xFF6750A4).withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+      child: Icon(icon, size: 18, color: const Color(0xFF6750A4)),
+    );
+  }
+
   Widget _detailRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -475,7 +607,7 @@ class _DashboardState extends State<Dashboard> {
                   child: Text("Active Envelopes", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.grey)),
                 ),
                 SizedBox(
-                  height: 100,
+                  height: 140,
                   child: ListView(
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -485,29 +617,48 @@ class _DashboardState extends State<Dashboard> {
                       final percent = (spent / limit).clamp(0.0, 1.0);
                       final isOver = spent > limit;
                       return Container(
-                        width: 160,
-                        margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                        padding: const EdgeInsets.all(12),
+                        width: 170,
+                        margin: const EdgeInsets.only(right: 12, top: 8, bottom: 8),
+                        padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
                           color: themeNotifier.value == ThemeMode.dark ? Colors.grey[900] : Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: isOver ? Colors.red.withOpacity(0.5) : Colors.transparent),
-                          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4)],
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.04),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(cat, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
-                            const SizedBox(height: 4),
-                            LinearProgressIndicator(
-                              value: percent,
-                              color: isOver ? Colors.red : Colors.purple[200],
-                              backgroundColor: Colors.grey[200],
-                              minHeight: 4,
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                // Dynamic Icons based on Category Name
+                                _getCategoryIcon(cat), 
+                                if (isOver) const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 18),
+                              ],
                             ),
+                            const Spacer(),
+                            Text(cat, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                             const SizedBox(height: 4),
-                            Text("₱${spent.toInt()} / ₱${limit.toInt()}", style: TextStyle(fontSize: 10, color: isOver ? Colors.red : Colors.grey)),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: LinearProgressIndicator(
+                                value: percent,
+                                color: isOver ? Colors.red : const Color(0xFF6750A4),
+                                backgroundColor: Colors.grey[200],
+                                minHeight: 6,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              "₱${(limit - spent).toInt()} left", 
+                              style: TextStyle(fontSize: 11, color: isOver ? Colors.red : Colors.grey[600], fontWeight: FontWeight.w600)
+                            ),
                           ],
                         ),
                       );
@@ -538,13 +689,25 @@ class _DashboardState extends State<Dashboard> {
                       }
                     },
                     background: Container(color: Colors.red, alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete, color: Colors.white)),
-                    child: Card(
-                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: themeNotifier.value == ThemeMode.dark ? Colors.white.withOpacity(0.05) : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.grey.withOpacity(0.1)), // Subtle border
+                      ),
                       child: ListTile(
-                        leading: const CircleAvatar(child: Icon(Icons.receipt_long, size: 20)),
-                        title: Text(expense['description'] ?? 'No Description'),
-                        subtitle: Text("${expense['category']} • ${expense['created_at'].toString().split('T')[0]}"),
-                        trailing: Text("₱${expense['amount']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        leading: CircleAvatar(
+                          backgroundColor: const Color(0xFF6750A4).withOpacity(0.1),
+                          child: const Icon(Icons.receipt_long, color: Color(0xFF6750A4), size: 20),
+                        ),
+                        title: Text(expense['description'] ?? 'No Description', style: const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Text("${expense['category']} • ${expense['created_at'].toString().split('T')[0]}", style: const TextStyle(fontSize: 12)),
+                        trailing: Text(
+                          "₱${expense['amount']}", 
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF6750A4))
+                        ),
                         onTap: () => _showExpenseDetails(context, expense),
                       ),
                     ),
@@ -568,79 +731,116 @@ class ProfilePage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text("Profile & Settings")),
       body: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          const Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Row(
+          // PREMIUM HEADER
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(colors: [Color(0xFF6750A4), Color(0xFF9581CD)]),
+              borderRadius: BorderRadius.circular(28),
+            ),
+            child: const Row(
               children: [
                 CircleAvatar(
-                  radius: 30,
-                  backgroundColor: Color(0xFFE8DEF8),
-                  child: Icon(Icons.person, size: 40, color: Colors.purple),
+                  radius: 35,
+                  backgroundColor: Colors.white24,
+                  child: Icon(Icons.person, size: 40, color: Colors.white),
                 ),
-                SizedBox(width: 16),
+                SizedBox(width: 20),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text("User Activity", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                    Text("Managing your Sintabo data", style: TextStyle(color: Colors.grey)),
+                    Text("Sintabo User", style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                    Text("Standard Account", style: TextStyle(color: Colors.white70, fontSize: 14)),
                   ],
                 ),
               ],
             ),
           ),
-          const Divider(),
-          ValueListenableBuilder<ThemeMode>(
-            valueListenable: themeNotifier,
-            builder: (context, currentMode, _) {
-              return SwitchListTile(
-                title: const Text("Dark Mode"),
-                secondary: const Icon(Icons.dark_mode_outlined),
-                value: currentMode == ThemeMode.dark,
-                onChanged: (bool isDark) async {
-                  themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setBool('is_dark_mode', isDark);
-                },
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.account_balance_wallet_outlined),
-            title: const Text("Category Budgets"),
-            subtitle: const Text("Set limits for Food, Transport, etc."),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () async {
-              final prefs = await SharedPreferences.getInstance();
-              final categories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
-              if (context.mounted) {
-                Navigator.push(context, MaterialPageRoute(
-                  builder: (c) => CategoryBudgetManager(categories: categories)
-                ));
-              }
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.sync),
-            title: const Text("Recurring Expenses"),
-            subtitle: const Text("Manage subscriptions and bills"),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () async {
-              final prefs = await SharedPreferences.getInstance();
-              final categories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
-              if (context.mounted) {
-                Navigator.push(context, MaterialPageRoute(
-                  builder: (c) => BillRegistry(
-                    categories: categories, 
-                    expenses: expenses, // Pass the live data from MainNavigation's stream
-                  )
-                ));
-              }
-            },
-          ),
+          const SizedBox(height: 24),
+          
+          // SETTINGS SECTION
+          _buildSettingsGroup("App Preferences", [
+            _settingsTile(Icons.dark_mode_outlined, "Dark Mode", trailing: _darkModeSwitch()),
+          ]),
+          const SizedBox(height: 16),
+          _buildSettingsGroup("Financial Management", [
+            _settingsTile(Icons.account_balance_wallet_outlined, "Category Budgets", onTap: () => _navToBudget(context)),
+            _settingsTile(Icons.sync, "Recurring Expenses", onTap: () => _navToBills(context)),
+          ]),
         ],
       ),
     );
+  }
+
+  // Helper for "Island" grouping
+  Widget _buildSettingsGroup(String title, List<Widget> children) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 12, bottom: 8),
+          child: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.grey)),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: themeNotifier.value == ThemeMode.dark ? Colors.white.withOpacity(0.05) : Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.grey.withOpacity(0.1)),
+          ),
+          child: Column(children: children),
+        ),
+      ],
+    );
+  }
+
+  Widget _settingsTile(IconData icon, String title, {Widget? trailing, VoidCallback? onTap}) {
+    return ListTile(
+      leading: Icon(icon, color: const Color(0xFF6750A4)),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w500)),
+      trailing: trailing ?? const Icon(Icons.chevron_right, size: 20),
+      onTap: onTap,
+    );
+  }
+
+  Widget _darkModeSwitch() {
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeNotifier,
+      builder: (context, currentMode, _) {
+        return Switch(
+          value: currentMode == ThemeMode.dark,
+          onChanged: (bool isDark) async {
+            themeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('is_dark_mode', isDark);
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _navToBudget(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    final categories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
+    if (context.mounted) {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (c) => CategoryBudgetManager(categories: categories)
+      ));
+    }
+  }
+
+  Future<void> _navToBills(BuildContext context) async {
+    final prefs = await SharedPreferences.getInstance();
+    final categories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
+    if (context.mounted) {
+      Navigator.push(context, MaterialPageRoute(
+        builder: (c) => BillRegistry(
+          categories: categories, 
+          expenses: expenses, 
+        )
+      ));
+    }
   }
 }
 
@@ -652,21 +852,38 @@ class TotalSpentCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(20),
+      margin: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(vertical: 30, horizontal: 24),
       decoration: BoxDecoration(
-        color: const Color(0xFFE8DEF8),
-        borderRadius: BorderRadius.circular(20),
+        // Premium Gradient: Deep Purple to a lighter shade
+        gradient: const LinearGradient(
+          colors: [Color(0xFF6750A4), Color(0xFF9581CD)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.purple.withOpacity(0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text("Total Spent", style: TextStyle(color: Colors.black54, fontSize: 16)),
+          const Text(
+            "Total Monthly Spend", 
+            style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w500)
+          ),
+          const SizedBox(height: 8),
           Text(
             "₱${amount.toStringAsFixed(2)}",
             style: const TextStyle(
-              fontSize: 36,
+              fontSize: 38,
               fontWeight: FontWeight.bold,
-              color: Colors.black,
+              color: Colors.white,
               letterSpacing: -1,
             ),
           ),

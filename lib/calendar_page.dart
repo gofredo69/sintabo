@@ -41,36 +41,72 @@ class _CalendarPageState extends State<CalendarPage> {
             focusedDay: _focusedDay,
             selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
             onDaySelected: (sd, fd) => setState(() { _selectedDay = sd; _focusedDay = fd; }),
+            headerStyle: const HeaderStyle(
+              formatButtonVisible: false,
+              titleCentered: true,
+              titleTextStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+            ),
+            calendarStyle: CalendarStyle(
+              todayDecoration: BoxDecoration(color: const Color(0xFF6750A4).withOpacity(0.3), shape: BoxShape.circle),
+              selectedDecoration: const BoxDecoration(color: Color(0xFF6750A4), shape: BoxShape.circle),
+              markerDecoration: const BoxDecoration(color: Color(0xFF6750A4), shape: BoxShape.circle),
+            ),
             // RESTORED GRID HIGHLIGHTS
             calendarBuilders: CalendarBuilders(
               defaultBuilder: (context, day, focusedDay) {
                 final dayKey = DateTime(day.year, day.month, day.day);
                 if (dailyTotals.containsKey(dayKey)) {
-                  return Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text('${day.day}'),
-                      Text("₱${dailyTotals[dayKey]!.toInt()}", 
-                        style: const TextStyle(fontSize: 9, color: Colors.red, fontWeight: FontWeight.bold)),
-                    ],
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text('${day.day}', style: const TextStyle(fontWeight: FontWeight.w500)),
+                        Container(
+                          margin: const EdgeInsets.only(top: 2),
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(color: Colors.red.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
+                          child: Text("₱${dailyTotals[dayKey]!.toInt()}", style: const TextStyle(fontSize: 8, color: Colors.red, fontWeight: FontWeight.bold)),
+                        ),
+                      ],
+                    ),
                   );
                 }
                 return null;
               },
             ),
           ),
-          const Divider(),
+          const SizedBox(height: 8),
           // TABULATION FOR SELECTED DAY
           Expanded(
             child: _selectedDay == null
-                ? const Center(child: Text("Select a date to view tabulation"))
-                : ListView.builder(
-                    itemCount: dayExpenses.length,
-                    itemBuilder: (ctx, i) => ListTile(
-                      leading: const Icon(Icons.shopping_bag_outlined),
-                      title: Text(dayExpenses[i]['description'] ?? "No Description"),
-                      subtitle: Text(dayExpenses[i]['category']),
-                      trailing: Text("₱${dayExpenses[i]['amount']}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                ? const Center(child: Text("Select a date to view tabulation", style: TextStyle(color: Colors.grey)))
+                : Container(
+                    margin: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).cardColor,
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(color: Colors.grey.withOpacity(0.1)),
+                    ),
+                    child: ListView.builder(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      itemCount: dayExpenses.length,
+                      itemBuilder: (ctx, i) => Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          color: Colors.grey.withOpacity(0.03),
+                        ),
+                        child: ListTile(
+                          leading: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(color: Colors.purple.withOpacity(0.1), shape: BoxShape.circle),
+                            child: const Icon(Icons.shopping_bag_outlined, color: Colors.purple, size: 20),
+                          ),
+                          title: Text(dayExpenses[i]['description'] ?? "No Description", style: const TextStyle(fontWeight: FontWeight.w600)),
+                          subtitle: Text(dayExpenses[i]['category'], style: const TextStyle(fontSize: 12)),
+                          trailing: Text("₱${dayExpenses[i]['amount']}", style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF6750A4))),
+                        ),
+                      ),
                     ),
                   ),
           ),

@@ -6,7 +6,7 @@ import 'package:uuid/uuid.dart';
 
 Future<String> getOrCreateDeviceId() async {
   final prefs = await SharedPreferences.getInstance();
-  // We use 'unique_device_id' everywhere now
+  // Ensure this key name is IDENTICAL in both files
   String? deviceId = prefs.getString('unique_device_id');
   
   if (deviceId == null || deviceId.isEmpty) {
@@ -92,6 +92,17 @@ class _BillRegistryState extends State<BillRegistry> {
     );
   }
 
+  bool _isBillPaid(String billName) {
+    final now = DateTime.now();
+    // This searches the live expenses list for a match this month
+    return widget.expenses.any((e) {
+      final date = DateTime.parse(e['created_at']);
+      return e['description'] == "Paid: $billName" && 
+             date.month == now.month && 
+             date.year == now.year;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -103,6 +114,9 @@ class _BillRegistryState extends State<BillRegistry> {
             itemCount: _bills.length,
             itemBuilder: (ctx, i) {
               final bill = _bills[i];
+              // 1. Check the live database list for this specific bill
+              final bool isPaid = _isBillPaid(bill['name']);
+
               return Dismissible(
                 key: Key(bill['name'] + i.toString()),
                 direction: DismissDirection.endToStart,
@@ -116,10 +130,19 @@ class _BillRegistryState extends State<BillRegistry> {
                     leading: const Icon(Icons.receipt_long),
                     title: Text(bill['name']),
                     subtitle: Text("Due: ${bill['due']} • ₱${bill['amount']}"),
-                    trailing: ElevatedButton(
-                      onPressed: () => _markAsPaid(bill),
-                      child: const Text("Pay"),
-                    ),
+                    // 2. Use the 'isPaid' variable to decide what to show
+                    trailing: isPaid 
+                      ? const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.check_circle, color: Colors.green),
+                            Text("Paid", style: TextStyle(color: Colors.green, fontSize: 12)),
+                          ],
+                        )
+                      : ElevatedButton(
+                          onPressed: () => _markAsPaid(bill),
+                          child: const Text("Pay"),
+                        ),
                   ),
                 ),
               );
@@ -134,27 +157,33 @@ class _BillRegistryState extends State<BillRegistry> {
 
   Future<void> _markAsPaid(Map<String, dynamic> bill) async {
     final deviceId = await getOrCreateDeviceId();
+    final now = DateTime.now();
 
     try {
-      await Supabase.instance.client
-          .from('expenses')
-          .insert({
-            'amount': bill['amount'],
-            'category': bill['category'] ?? 'Bills',
-            'description': "Paid: ${bill['name']}",
-            'device_id': deviceId, 
-            // Stripping the 'Z' ensures it stays in Philippines time
-            'created_at': DateTime.now().toIso8601String().split('Z')[0],
-          })
-          .setHeader('x-device-id', deviceId);
-    
+      // 1. Perform the database insert
+      await Supabase.instance.client.from('expenses').insert({
+        'amount': bill['amount'],
+        'category': bill['category'] ?? 'Bills',
+        'description': "Paid: ${bill['name']}",
+        'device_id': deviceId,
+        'created_at': now.toUtc().toIso8601String(), 
+      }).setHeader('x-device-id', deviceId);
+
+      // 2. CRITICAL: Manually add the new payment to the local list temporarily
+      // This forces the 'Paid' check to pass immediately without waiting for the Navigator to pop.
+      setState(() {
+        widget.expenses.add({
+          'description': "Paid: ${bill['name']}",
+          'created_at': now.toUtc().toIso8601String(),
+          'amount': bill['amount'],
+          'category': bill['category'],
+        });
+      });
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Payment Successful!"), backgroundColor: Colors.green),
         );
-        
-        // This is important: Pop with a result to notify the parent to refresh if needed
-        Navigator.pop(context, true); 
       }
     } catch (e) {
       debugPrint("Payment Logic Error: $e");
