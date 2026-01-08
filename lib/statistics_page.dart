@@ -15,9 +15,16 @@ class _StatisticsPageState extends State<StatisticsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final now = DateTime.now();
     Map<String, Map<String, dynamic>> dataMap = {};
     
-    for (var item in widget.expenses) {
+    // FILTER: Only loop through expenses from the current month
+    final currentMonthData = widget.expenses.where((e) {
+      final date = DateTime.parse(e['created_at']).toLocal();
+      return date.month == now.month && date.year == now.year;
+    }).toList();
+
+    for (var item in currentMonthData) {
       String cat = item['category'] ?? 'Other';
       double amt = (item['amount'] as num).toDouble();
       String colorHex = item['category_color'] ?? 'ff808080';
@@ -31,7 +38,7 @@ class _StatisticsPageState extends State<StatisticsPage> {
 
     final categoryExpenses = _tappedCategory == null 
         ? [] 
-        : widget.expenses.where((e) => e['category'] == _tappedCategory).toList();
+        : currentMonthData.where((e) => e['category'] == _tappedCategory).toList();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Statistics'), centerTitle: true),

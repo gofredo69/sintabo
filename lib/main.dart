@@ -344,8 +344,15 @@ class _DashboardState extends State<Dashboard> {
   }
 
   double _getAmountSpentInCategory(String category) {
+    final now = DateTime.now();
     return widget.expenses
-        .where((e) => e['category'] == category && !_deletedIds.contains(e['id']))
+        .where((e) {
+          final date = DateTime.parse(e['created_at']).toLocal();
+          return e['category'] == category && 
+                 !_deletedIds.contains(e['id']) &&
+                 date.month == now.month &&
+                 date.year == now.year;
+        })
         .fold(0.0, (sum, e) => sum + (e['amount'] as num).toDouble());
   }
 
@@ -542,11 +549,18 @@ class _DashboardState extends State<Dashboard> {
 
   @override
   Widget build(BuildContext context) {
-    // CRITICAL: Calculate these values directly from the widget.expenses list.
-    // This ensures that when the stream in MainNavigation pings, the UI updates instantly.
-    final activeExpenses = widget.expenses.where((e) => !_deletedIds.contains(e['id'])).toList();
+    final now = DateTime.now();
+
+    // FILTER: Only include expenses from the current month and year
+    final currentMonthExpenses = widget.expenses.where((e) {
+      final date = DateTime.parse(e['created_at']).toLocal();
+      return date.month == now.month && 
+             date.year == now.year && 
+             !_deletedIds.contains(e['id']);
+    }).toList();
     
-    final totalSpent = activeExpenses.fold<double>(
+    // Use 'currentMonthExpenses' instead of 'activeExpenses' for calculations
+    final totalSpent = currentMonthExpenses.fold<double>(
       0, (sum, item) => sum + (item['amount'] as num).toDouble()
     );
 
@@ -554,8 +568,8 @@ class _DashboardState extends State<Dashboard> {
     final budgetColor = budgetPercent > 0.9 ? Colors.red : Colors.green;
 
     final filtered = _selectedFilter == 'All' 
-        ? activeExpenses 
-        : activeExpenses.where((e) => e['category'] == _selectedFilter).toList();
+        ? currentMonthExpenses 
+        : currentMonthExpenses.where((e) => e['category'] == _selectedFilter).toList();
 
     final filteredTotal = filtered.fold<double>(
       0, (sum, item) => sum + (item['amount'] as num).toDouble()
