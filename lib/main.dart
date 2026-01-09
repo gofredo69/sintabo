@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart'; 
@@ -6,13 +7,16 @@ import 'calendar_page.dart';
 import 'statistics_page.dart';
 import 'category_budget_manager.dart';
 import 'bill_registry.dart';
+import 'ocr_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
+  await dotenv.load(fileName: ".env");
+
   await Supabase.initialize(
-    url: 'https://cavcdfhnbuiruhywpuzj.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNhdmNkZmhuYnVpcnVoeXdwdXpqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYzMzUzNTAsImV4cCI6MjA4MTkxMTM1MH0.89nL3gL1SLn15ZPwnpbOMRzLjdYBa6E3AWYgSq6KthU',
+    url: dotenv.env['SUPABASE_URL'] ?? '',
+    anonKey: dotenv.env['SUPABASE_ANON_KEY'] ?? '',
     headers: {
       'x-device-id': await getOrCreateDeviceId(), // Must match 'x-device-id' in SQL
     },
@@ -78,6 +82,7 @@ class _MainNavigationState extends State<MainNavigation> {
   int _selectedIndex = 0;
   String? currentDeviceId;
   SharedPreferences? _prefs;
+  final OCRService _ocrService = OCRService();
   
   final Map<String, Color> _categoryColors = {
     'Food': const Color(0xFFFF5252),
@@ -92,6 +97,12 @@ class _MainNavigationState extends State<MainNavigation> {
     super.initState();
     _loadId();
     _initPrefs();
+  }
+
+  @override
+  void dispose() {
+    _ocrService.dispose();
+    super.dispose();
   }
 
   Future<void> _loadId() async {
@@ -121,6 +132,13 @@ class _MainNavigationState extends State<MainNavigation> {
     return colorMap;
   }
 
+  // Helper function to keep code clean
+  void _showErrorSnackBar(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
+  }
+
   void _showAddExpenseSheet(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
     final categories = prefs.getStringList('user_categories') ?? ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
@@ -132,6 +150,7 @@ class _MainNavigationState extends State<MainNavigation> {
     String cat = categories.first;
     DateTime selectedDate = DateTime.now();
     Color selectedColor = _categoryColors[cat] ?? const Color(0xFF6750A4);
+    bool isScanning = false;
 
     showModalBottomSheet(
       context: context,
@@ -143,7 +162,79 @@ class _MainNavigationState extends State<MainNavigation> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text("Add Expense", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-              TextField(controller: amountController, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: "Amount", prefixText: "₱ ")),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: amountController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: "Amount",
+                        prefixText: "₱ ",
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: isScanning 
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.qr_code_scanner, color: Color(0xFF6750A4)),
+                    onPressed: () async {
+                      // 1. Start the loading state so the spinner appears
+                      setSS(() => isScanning = true);
+
+                      try {
+                        // 2. Call the new Groq-powered service
+                        final result = await _ocrService.scanAndAnalyze();
+
+                        if (result != null) {
+                          // 3. Success! Auto-fill the fields
+                          setSS(() {
+                            amountController.text = result['total_amount']?.toString() ?? "";
+                            descController.text = result['vendor_name']?.toString() ?? "";
+                            
+                            final suggestedCat = result['category']?.toString();
+                            if (suggestedCat != null && categories.contains(suggestedCat)) {
+                              cat = suggestedCat;
+                            }
+
+                            if (result['date'] != null) {
+                              try {
+                                selectedDate = DateTime.parse(result['date']);
+                              } catch (e) {
+                                debugPrint("Date parse error: $e");
+                              }
+                            }
+                          });
+                          
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Receipt analyzed successfully!"), backgroundColor: Colors.green),
+                            );
+                          }
+                        } else {
+                          // 4. Handle Empty Results
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text("Could not read receipt. Please try a clearer photo."), backgroundColor: Colors.orange),
+                            );
+                          }
+                        }
+                      } catch (e) {
+                        // 5. Handle Network/API Errors
+                        debugPrint("Sintabo Scan Error: $e");
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("Connection error. Check your internet or Groq API Key."), backgroundColor: Colors.red),
+                          );
+                        }
+                      } finally {
+                        // 6. Always stop the spinner, even if it fails
+                        setSS(() => isScanning = false);
+                      }
+                    },
+                  ),
+                ],
+              ),
               ListTile(
                 title: Text("Date: ${selectedDate.toLocal().toString().split(' ')[0]}"),
                 trailing: const Icon(Icons.calendar_today),
@@ -322,18 +413,23 @@ class _DashboardState extends State<Dashboard> {
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
-    final savedCategories = prefs.getStringList('user_categories');
     
-    // Only update if we actually have saved data to avoid blanking out the UI
-    if (savedCategories != null && savedCategories.isNotEmpty) {
-      setState(() {
-        _userCategories = savedCategories;
-        _monthlyBudget = prefs.getDouble('monthly_budget') ?? 10000.0;
-        for (String cat in _userCategories) {
-          _categoryBudgets[cat] = prefs.getDouble('budget_$cat') ?? 0.0;
-        }
-      });
-    }
+    // 1. Get the category list
+    final savedCategories = prefs.getStringList('user_categories') ?? 
+                            ['Food', 'Transport', 'Shopping', 'Bills', 'Other'];
+    
+    setState(() {
+      _userCategories = savedCategories;
+      _monthlyBudget = prefs.getDouble('monthly_budget') ?? 10000.0;
+      
+      // 2. FORCE RE-MAP: This ensures the UI "sees" the new budget values
+      _categoryBudgets.clear();
+      for (String cat in _userCategories) {
+        double? val = prefs.getDouble('budget_$cat');
+        // If val is > 0, the envelope will automatically appear
+        _categoryBudgets[cat] = val ?? 0.0;
+      }
+    });
   }
 
   Future<void> _saveSettings() async {
@@ -575,6 +671,9 @@ class _DashboardState extends State<Dashboard> {
       0, (sum, item) => sum + (item['amount'] as num).toDouble()
     );
 
+    // FILTER: Only show envelopes that have a budget set > 0
+    final activeEnvelopes = _userCategories.where((cat) => (_categoryBudgets[cat] ?? 0) > 0).toList();
+
     return Scaffold(
       appBar: AppBar(title: const Text('Sintabo')),
       body: Column(
@@ -612,7 +711,7 @@ class _DashboardState extends State<Dashboard> {
               ],
             ),
           ),
-          if (_userCategories.any((cat) => (_categoryBudgets[cat] ?? 0) > 0))
+          if (activeEnvelopes.isNotEmpty)
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -625,7 +724,7 @@ class _DashboardState extends State<Dashboard> {
                   child: ListView(
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    children: _userCategories.where((cat) => (_categoryBudgets[cat] ?? 0) > 0).map((cat) {
+                    children: activeEnvelopes.map((cat) {
                       final spent = _getAmountSpentInCategory(cat);
                       final limit = _categoryBudgets[cat]!;
                       final percent = (spent / limit).clamp(0.0, 1.0);
@@ -736,10 +835,15 @@ class _DashboardState extends State<Dashboard> {
   }
 }
 
-class ProfilePage extends StatelessWidget {
+class ProfilePage extends StatefulWidget {
   final List<Map<String, dynamic>> expenses;
   const ProfilePage({super.key, required this.expenses});
 
+  @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -840,7 +944,7 @@ class ProfilePage extends StatelessWidget {
     if (context.mounted) {
       Navigator.push(context, MaterialPageRoute(
         builder: (c) => CategoryBudgetManager(categories: categories)
-      ));
+      )).then((_) => setState(() {}));
     }
   }
 
@@ -851,7 +955,7 @@ class ProfilePage extends StatelessWidget {
       Navigator.push(context, MaterialPageRoute(
         builder: (c) => BillRegistry(
           categories: categories, 
-          expenses: expenses, 
+          expenses: widget.expenses, 
         )
       ));
     }
