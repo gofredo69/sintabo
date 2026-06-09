@@ -12,16 +12,35 @@ class StatisticsPage extends StatefulWidget {
 
 class _StatisticsPageState extends State<StatisticsPage> {
   String? _tappedCategory;
+  DateTime _selectedMonth = DateTime.now();
+
+  void _decrementMonth() {
+    setState(() {
+      _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1);
+      _tappedCategory = null;
+    });
+  }
+
+  void _incrementMonth() {
+    setState(() {
+      _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
+      _tappedCategory = null;
+    });
+  }
+
+  String _getMonthName(int month) {
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    return monthNames[month - 1];
+  }
 
   @override
   Widget build(BuildContext context) {
-    final now = DateTime.now();
     Map<String, Map<String, dynamic>> dataMap = {};
     
     // FILTER: Only loop through expenses from the current month
     final currentMonthData = widget.expenses.where((e) {
       final date = DateTime.parse(e['created_at']).toLocal();
-      return date.month == now.month && date.year == now.year;
+      return date.month == _selectedMonth.month && date.year == _selectedMonth.year;
     }).toList();
 
     for (var item in currentMonthData) {
@@ -44,9 +63,40 @@ class _StatisticsPageState extends State<StatisticsPage> {
       appBar: AppBar(title: const Text('Statistics'), centerTitle: true),
       body: Column(
         children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 16.0, bottom: 4.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: _decrementMonth,
+                ),
+                SizedBox(
+                  width: 140,
+                  child: Center(
+                    child: Text(
+                      "${_getMonthName(_selectedMonth.month)} ${_selectedMonth.year}",
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: () {
+                    if (_selectedMonth.year == DateTime.now().year && 
+                        _selectedMonth.month == DateTime.now().month) {
+                      return; 
+                    }
+                    _incrementMonth();
+                  },
+                ),
+              ],
+            ),
+          ),
           const Padding(
-            padding: EdgeInsets.symmetric(vertical: 20),
-            child: Text("Spending by Category", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            padding: EdgeInsets.only(bottom: 16.0),
+            child: Text("Spending by Category", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey)),
           ),
           // DONUT CHART WITH TOUCH INTERACTION
           SizedBox(

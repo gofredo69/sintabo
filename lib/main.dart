@@ -792,6 +792,35 @@ class _DashboardState extends State<Dashboard> {
                   final expense = filtered[i];
                   return Dismissible(
                     key: Key(expense['id'].toString()),
+                    direction: DismissDirection.endToStart,
+                    background: Container(
+                      color: Colors.red,
+                      alignment: Alignment.centerRight,
+                      padding: const EdgeInsets.only(right: 20.0),
+                      child: const Icon(Icons.delete, color: Colors.white),
+                    ),
+                    confirmDismiss: (DismissDirection direction) async {
+                      return await showDialog(
+                        context: context,
+                        builder: (BuildContext context) {
+                          return AlertDialog(
+                            title: const Text("Confirm Deletion"),
+                            content: const Text("Are you sure you want to permanently delete this transaction?"),
+                            actions: <Widget>[
+                              TextButton(
+                                onPressed: () => Navigator.of(context).pop(false),
+                                child: const Text("Cancel"),
+                              ),
+                              TextButton(
+                                style: TextButton.styleFrom(foregroundColor: Colors.red),
+                                onPressed: () => Navigator.of(context).pop(true),
+                                child: const Text("Delete"),
+                              ),
+                            ],
+                          );
+                        },
+                      );
+                    },
                     onDismissed: (dir) async {
                       final id = expense['id'];
                       setState(() => _deletedIds.add(id));
@@ -801,7 +830,6 @@ class _DashboardState extends State<Dashboard> {
                         if (mounted) setState(() => _deletedIds.remove(id));
                       }
                     },
-                    background: Container(color: Colors.red, alignment: Alignment.centerRight, padding: const EdgeInsets.only(right: 20), child: const Icon(Icons.delete, color: Colors.white)),
                     child: Container(
                       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                       decoration: BoxDecoration(
